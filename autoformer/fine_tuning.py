@@ -319,6 +319,8 @@ class AutoformerFineTuner:
                 print(
                     f"Warning: Expected {self.prediction_length} predictions, got {len(predictions)}"
                 )
+                print(f"Raw predictions shape: {predictions.shape}")
+                print(f"Raw predictions: {predictions}")
                 if len(predictions) > self.prediction_length:
                     predictions = predictions[: self.prediction_length]
                 else:
@@ -328,6 +330,7 @@ class AutoformerFineTuner:
                         predictions,
                         [last_val] * (self.prediction_length - len(predictions)),
                     )
+                print(f"Adjusted predictions: {predictions}")
 
         return predictions
 
@@ -435,10 +438,49 @@ class AutoformerFineTuner:
             print(f"Predicted future 3 months: {predictions}")
 
             # 예측 정확도 계산
-            mse = np.mean((true_future_values - predictions) ** 2)
-            mae = np.mean(np.abs(true_future_values - predictions))
+            # 길이 확인 및 조정
+            min_length = min(len(true_future_values), len(predictions))
+            true_future_adjusted = true_future_values[:min_length]
+            predictions_adjusted = predictions[:min_length]
+
+            mse = np.mean((true_future_adjusted - predictions_adjusted) ** 2)
+            mae = np.mean(np.abs(true_future_adjusted - predictions_adjusted))
             print(f"Mean Squared Error: {mse:.2f}")
             print(f"Mean Absolute Error: {mae:.2f}")
+            print(
+                f"Note: Using {min_length} months for accuracy calculation (true: {len(true_future_values)}, predicted: {len(predictions)})"
+            )
+
+            # past_values의 boxplot 기준값 계산
+            past_values_sorted = np.sort(past_values)
+            q1 = np.percentile(past_values, 25)
+            q3 = np.percentile(past_values, 75)
+            iqr = q3 - q1
+            lower_fence = q1 - 1.5 * iqr
+            upper_fence = q3 + 1.5 * iqr
+            median = np.median(past_values)
+
+            # predictions의 평균 계산
+            predictions_mean = np.mean(predictions)
+
+            # 예측값이 기준값을 넘는지 확인하고 폴더 결정
+            if predictions_mean > upper_fence:
+                save_folder = "upper-fence"
+            elif predictions_mean > q3:
+                save_folder = "75"
+            elif predictions_mean > median:
+                save_folder = "median"
+            else:
+                save_folder = "normal"
+
+            print(f"Boxplot 기준값:")
+            print(f"  Lower fence: {lower_fence:.2f}")
+            print(f"  25% (Q1): {q1:.2f}")
+            print(f"  Median: {median:.2f}")
+            print(f"  75% (Q3): {q3:.2f}")
+            print(f"  Upper fence: {upper_fence:.2f}")
+            print(f"Predictions 평균: {predictions_mean:.2f}")
+            print(f"저장 폴더: {save_folder}")
 
             # 시각화
             self.plot_prediction_result(
@@ -448,6 +490,7 @@ class AutoformerFineTuner:
                 city,
                 year_month,
                 has_actual=True,
+                save_folder=save_folder,
             )
 
             return {
@@ -538,9 +581,22 @@ class AutoformerFineTuner:
             }
 
     def plot_prediction_result(
-        self, past_values, true_future, predictions, city, year_month, has_actual=True
+        self,
+        past_values,
+        true_future,
+        predictions,
+        city,
+        year_month,
+        has_actual=True,
+        save_folder=None,
     ):
         """예측 결과 시각화"""
+        # 디버그 정보 출력
+        print(f"Debug - past_values length: {len(past_values)}")
+        print(f"Debug - predictions length: {len(predictions)}")
+        if true_future is not None:
+            print(f"Debug - true_future length: {len(true_future)}")
+
         plt.figure(figsize=(15, 6))
 
         # 과거 데이터의 year_month 생성 (12개월)
@@ -589,8 +645,10 @@ class AutoformerFineTuner:
 
         if has_actual and true_future is not None:
             # 실제 미래 데이터 (3개월) - 과거와 연결
+            # 길이 확인 및 조정
+            actual_future_dates = future_dates[: len(true_future)]
             actual_values = [past_values[-1]] + list(true_future)
-            actual_dates = [past_dates[-1]] + future_dates
+            actual_dates = [past_dates[-1]] + actual_future_dates
             plt.plot(
                 actual_dates,
                 actual_values,
@@ -602,7 +660,9 @@ class AutoformerFineTuner:
             )
 
             # 실제 미래 데이터 포인트에 값 표시 (과거 마지막 값 제외)
-            for i, (date, value) in enumerate(zip(future_dates, true_future)):
+            # 길이 확인 및 조정
+            actual_future_dates = future_dates[: len(true_future)]
+            for i, (date, value) in enumerate(zip(actual_future_dates, true_future)):
                 plt.annotate(
                     f"{value:.0f}",
                     (date, value),
@@ -614,8 +674,10 @@ class AutoformerFineTuner:
                 )
 
         # 예측 미래 데이터 (3개월) - 과거와 연결
+        # 길이 확인 및 조정
+        pred_future_dates = future_dates[: len(predictions)]
         pred_values = [past_values[-1]] + list(predictions)
-        pred_dates = [past_dates[-1]] + future_dates
+        pred_dates = [past_dates[-1]] + pred_future_dates
         plt.plot(
             pred_dates,
             pred_values,
@@ -627,7 +689,9 @@ class AutoformerFineTuner:
         )
 
         # 예측 미래 데이터 포인트에 값 표시 (과거 마지막 값 제외)
-        for i, (date, value) in enumerate(zip(future_dates, predictions)):
+        # 길이 확인 및 조정
+        pred_future_dates = future_dates[: len(predictions)]
+        for i, (date, value) in enumerate(zip(pred_future_dates, predictions)):
             plt.annotate(
                 f"{value:.0f}",
                 (date, value),
@@ -658,8 +722,22 @@ class AutoformerFineTuner:
         )
 
         plt.tight_layout()
-        plt.savefig(f"prediction_{city}_{year_month}.png", dpi=300, bbox_inches="tight")
-        plt.show()
+        if save_folder:
+            # save_folder가 있으면 해당 폴더에 저장
+            import os
+
+            os.makedirs(f"result/batch32_epoch100_lr3e-5/{save_folder}", exist_ok=True)
+            plt.savefig(
+                f"result/batch32_epoch100_lr3e-5/{save_folder}/prediction_{city}_{year_month}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+        else:
+            # save_folder가 없으면 현재 위치에 저장
+            plt.savefig(
+                f"prediction_{city}_{year_month}.png", dpi=300, bbox_inches="tight"
+            )
+        # plt.show()
 
     def interactive_prediction(self, data_path):
         """사용자 인터랙티브 예측"""
@@ -671,9 +749,10 @@ class AutoformerFineTuner:
                 print("\n--- Prediction Options ---")
                 print("1. Predict for existing data (validation)")
                 print("2. Predict for future (using latest data)")
-                print("3. Back to main menu")
+                print("3. Predict for all cities (2025-01)")
+                print("4. Back to main menu")
 
-                pred_choice = input("\nEnter your choice (1-3): ").strip()
+                pred_choice = input("\nEnter your choice (1-4): ").strip()
 
                 if pred_choice == "1":
                     # 기존 데이터에 대한 예측 (검증용)
@@ -721,6 +800,11 @@ class AutoformerFineTuner:
                         )
 
                 elif pred_choice == "3":
+                    for city in self.all_cities:
+                        year_month = "2025-01"
+                        self.predict_for_city_month(city, year_month, data_path)
+
+                elif pred_choice == "4":
                     break
 
                 else:
