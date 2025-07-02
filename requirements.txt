@@ -1,0 +1,14 @@
+ipykernel
+transformers
+torch
+huggingface-hub
+datasets
+evaluate
+accelerate
+gluonts[torch]
+ujson
+tqdm
+matplotlib
+ace_tools
+scikit-learn
+python-details
